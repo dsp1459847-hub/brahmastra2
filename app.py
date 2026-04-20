@@ -4,16 +4,16 @@ import numpy as np
 from datetime import timedelta
 from collections import Counter
 
-st.set_page_config(page_title="MAYA AI - Frequency Tracker", layout="wide")
+st.set_page_config(page_title="MAYA AI - Cross Shift Subtraction", layout="wide")
 
-st.title("MAYA AI 📊: Historical Frequency Tracker Engine")
-st.markdown("Yeh engine pichle 30-60 dinon ka itihas padhkar batayega ki kis 'Frequency Group' (Jaise 2 Baar ya 4 Baar) se sach mein sabse zyada number aate hain!")
+st.title("MAYA AI ⚔️: Cross-Shift Subtraction Engine")
+st.markdown("Yeh AI sabhi shifton ke 28 Tiers check karke **'Sabse Best Tier'** mein se **'Zero Hit (Dead) Tiers'** ke numbers ko MINUS karke final result deta hai.")
 
 # --- 1. Sidebar ---
 st.sidebar.header("📁 Upload File")
 uploaded_file = st.sidebar.file_uploader("Upload CSV/Excel", type=['csv', 'xlsx'])
 shift_names = ["DS", "FD", "GD", "GL", "DB", "SG", "ZA"]
-target_shift_name = st.sidebar.selectbox("Target Shift", shift_names)
+target_shift_name = st.sidebar.selectbox("🎯 Target Shift (Kiska result chahiye?)", shift_names)
 selected_end_date = st.sidebar.date_input("Calculation Date")
 max_repeat_limit = st.sidebar.slider("Max Repeat Limit", 2, 5, 4)
 
@@ -52,129 +52,96 @@ if uploaded_file is not None:
             n_s = len(safe)
             return safe[:int(n_s*0.33)], safe[int(n_s*0.33):int(n_s*0.66)], safe[int(n_s*0.66):], elim_list
 
-        # --- 3. THE HISTORICAL BACKTEST ENGINE (Finding what hits most) ---
-        target_list = filtered_df[target_shift_name].tolist()
+        # --- 3. CROSS-SHIFT HISTORICAL RELATION CHECK (30 Days) ---
+        st.markdown("---")
+        test_days = 30
         valid_dates = filtered_df.dropna(subset=[target_shift_name])['DATE'].tolist()
+        test_dates = valid_dates[-test_days:] if len(valid_dates) > test_days else valid_dates
         
-        test_days_count = 30 # Pichle 30 din ka test karenge
-        test_dates = valid_dates[-test_days_count:] if len(valid_dates) > test_days_count else valid_dates
+        # Track hits for all 28 tiers
+        tier_performance = {f"{shift}_{tier}": 0 for shift in shift_names for tier in ["High", "Medium", "Low", "Eliminated"]}
         
-        freq_hit_history = Counter()
-
-        with st.spinner(f"Pichle {test_days_count} dinon ka data scan kar raha hoon taaki sabse strong 'Frequency (Baar)' dhoondh sakun..."):
-            for test_date in test_dates:
-                past_df = filtered_df[filtered_df['DATE'] < test_date]
+        with st.spinner(f"Pichle {test_days} dinon mein Sabhi Shifton ke cross-relations check ho rahe hain..."):
+            for t_date in test_dates:
+                past_df = filtered_df[filtered_df['DATE'] < t_date]
                 if len(past_df) < 15: continue
                 
-                # Best tiers nikalna (Fast mode)
-                best_t_dict = {}
-                for shift in shift_names:
-                    if shift not in past_df.columns: continue
-                    best_t_dict[shift] = "High" # Fast assumption for speed in backtest
+                actual_num = int(filtered_df[filtered_df['DATE'] == t_date][target_shift_name].values[0])
                 
-                all_nums = []
+                # Har shift ka tier calculate karna us din ke liye
                 for shift in shift_names:
                     if shift not in past_df.columns: continue
-                    s_list = past_df[shift].tolist()
-                    e, s = run_elimination(s_list, max_repeat_limit)
+                    past_s = past_df[shift].tolist()
+                    e, s = run_elimination(past_s, max_repeat_limit)
                     h, m, l, el = get_tiers(e, s)
-                    all_nums.extend(h) # Checking High tier for intersection
+                    
+                    if actual_num in h: tier_performance[f"{shift}_High"] += 1
+                    if actual_num in m: tier_performance[f"{shift}_Medium"] += 1
+                    if actual_num in l: tier_performance[f"{shift}_Low"] += 1
+                    if actual_num in el: tier_performance[f"{shift}_Eliminated"] += 1
 
-                f_counts = Counter(all_nums)
-                
-                # Actual Number of that day
-                actual_val = filtered_df[filtered_df['DATE'] == test_date][target_shift_name].values[0]
-                if pd.notna(actual_val):
-                    actual_res = int(actual_val)
-                    freq_of_actual = f_counts.get(actual_res, 0)
-                    freq_hit_history[freq_of_actual] += 1
-
-        # --- 4. DISPLAY HISTORICAL RESULTS ---
-        st.markdown("---")
-        st.header(f"📈 History Check: Pichle {test_days_count} dinon mein kahan se number aaye?")
+        # Hero Tier and Dead Tiers identify karna
+        hero_tier_name = max(tier_performance, key=tier_performance.get)
+        hero_tier_hits = tier_performance[hero_tier_name]
         
-        if freq_hit_history:
-            best_frequency = max(freq_hit_history, key=freq_hit_history.get)
-            
-            # Simple chart data preparation
-            chart_data = {"Group": [], "Kitni Baar Paas Hua": []}
-            for k in sorted(freq_hit_history.keys(), reverse=True):
-                if k > 0:
-                    chart_data["Group"].append(f"{k} Baar Aaye")
-                    chart_data["Kitni Baar Paas Hua"].append(freq_hit_history[k])
-            
-            c1, c2 = st.columns([1, 2])
-            with c1:
-                st.success(f"**Sabse Zordaar Group:**\n### {best_frequency} Baar Wale")
-                st.write("*(Pichle dino mein sabse zyada target numbers isi frequency se nikle hain)*")
-            with c2:
-                st.bar_chart(pd.DataFrame(chart_data).set_index("Group"))
-        else:
-            best_frequency = 2 # Default
-            st.warning("History check ke liye data kam hai.")
-
-        # --- 5. LIVE PREDICTION FOR TARGET DATE ---
-        st.markdown("---")
-        target_date = filtered_df['DATE'].iloc[-1] + timedelta(days=1)
-        st.header(f"🎯 Live Numbers for {target_date.strftime('%d %B %Y')}")
+        dead_tiers = [name for name, hits in tier_performance.items() if hits == 0]
         
-        # Step 1: Find best tier of target
-        all_best_numbers_live = []
-        with st.spinner("Aaj ke numbers calculate ho rahe hain..."):
+        st.write("### 📊 Cross-Shift Relation Report")
+        colA, colB = st.columns(2)
+        with colA:
+            st.success(f"**👑 HERO TIER (Sabse Zyada Aane Wala):**\n### {hero_tier_name}")
+            st.write(f"*Pichle {test_days} dino me **{target_shift_name}** ka number {hero_tier_hits} baar is tier se aaya hai!*")
+        with colB:
+            st.error(f"**💀 DEAD TIERS (Zero Hit Wale):**\n### {len(dead_tiers)} Tiers Mile")
+            st.write("*(In tiers ka number pichle 30 dino me ek baar bhi target shift me nahi aaya)*")
+            with st.expander("Show Dead Tiers"):
+                for dt in dead_tiers: st.write(f"- {dt}")
+
+        # --- 4. LIVE SUBTRACTION LOGIC FOR NEXT DAY ---
+        st.markdown("---")
+        next_date = filtered_df['DATE'].iloc[-1] + timedelta(days=1)
+        st.header(f"🎯 Master Prediction for {next_date.strftime('%d %B %Y')} ({target_shift_name})")
+        
+        with st.spinner("Hero Tier mein se Dead Tiers ke numbers MINUS kar raha hoon..."):
+            # Calculate today's tiers for all shifts
+            today_all_tiers = {}
             for shift in shift_names:
                 if shift not in filtered_df.columns: continue
                 s_list = filtered_df[shift].tolist()
                 e, s = run_elimination(s_list, max_repeat_limit)
                 h, m, l, el = get_tiers(e, s)
-                
-                # For high accuracy grouping, we gather all tiers and group them
-                # But for safety, we focus on High and Medium intersections
-                all_best_numbers_live.extend(h)
-                all_best_numbers_live.extend(m)
-
-        live_counts = Counter(all_best_numbers_live)
-        
-        freq_groups_live = {
-            "7 Baar": [], "6 Baar": [], "5 Baar": [], 
-            "4 Baar": [], "3 Baar": [], "2 Baar": [], "1 Baar": []
-        }
-        
-        for num, count in live_counts.items():
-            if count >= 7: freq_groups_live["7 Baar"].append(num)
-            elif count == 6: freq_groups_live["6 Baar"].append(num)
-            elif count == 5: freq_groups_live["5 Baar"].append(num)
-            elif count == 4: freq_groups_live["4 Baar"].append(num)
-            elif count == 3: freq_groups_live["3 Baar"].append(num)
-            elif count == 2: freq_groups_live["2 Baar"].append(num)
-            elif count == 1: freq_groups_live["1 Baar"].append(num)
-
-        st.info(f"💡 **AI Recommendation:** History ke hisab se aaj aapko **[{best_frequency} Baar]** aane wale numbers par sabse zyada focus karna chahiye!")
-
-        t1, t2 = st.columns(2)
-        with t1:
-            st.markdown(f"#### 🏆 Recommended Groups (History Match)")
+                today_all_tiers[f"{shift}_High"] = set(h)
+                today_all_tiers[f"{shift}_Medium"] = set(m)
+                today_all_tiers[f"{shift}_Low"] = set(l)
+                today_all_tiers[f"{shift}_Eliminated"] = set(el)
             
-            # Show the groups that match the best historical frequency (e.g., 2 and 3)
-            best_label = f"{best_frequency} Baar"
-            st.success(f"**{best_label} Aaye Hue Numbers ({len(freq_groups_live.get(best_label, []))} Nums):**")
-            st.write(", ".join([f"{x:02d}" for x in sorted(freq_groups_live.get(best_label, []))]) if freq_groups_live.get(best_label, []) else "None")
+            # Get Hero Numbers
+            hero_numbers = today_all_tiers.get(hero_tier_name, set())
             
-            # Additional close matches
-            alt_label = f"{best_frequency + 1} Baar"
-            st.warning(f"**{alt_label} Aaye Hue Numbers ({len(freq_groups_live.get(alt_label, []))} Nums):**")
-            st.write(", ".join([f"{x:02d}" for x in sorted(freq_groups_live.get(alt_label, []))]) if freq_groups_live.get(alt_label, []) else "None")
+            # Collect all Dead Numbers
+            dead_numbers = set()
+            for dt in dead_tiers:
+                dead_numbers.update(today_all_tiers.get(dt, set()))
+            
+            # The Magic: Subtraction
+            final_pure_numbers = hero_numbers - dead_numbers
+            
+        # Display Math
+        st.info(f"🧮 **The Subtraction Math:** [{hero_tier_name} ({len(hero_numbers)} nums)] MINUS [All Dead Tiers ({len(dead_numbers)} nums)] = {len(final_pure_numbers)} Pure Numbers")
 
-        with t2:
-            st.markdown(f"#### 📊 Other High Frequency Groups")
-            st.error(f"**4 Baar Aaye:** {len(freq_groups_live['4 Baar'])} Nums")
-            st.write(", ".join([f"{x:02d}" for x in sorted(freq_groups_live['4 Baar'])]) if freq_groups_live['4 Baar'] else "None")
-            
-            st.info(f"**5-7 Baar Aaye (Rare):**")
-            rare_nums = freq_groups_live['5 Baar'] + freq_groups_live['6 Baar'] + freq_groups_live['7 Baar']
-            st.write(", ".join([f"{x:02d}" for x in sorted(rare_nums)]) if rare_nums else "None")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(f"#### 👑 Original Hero Numbers")
+            st.write(", ".join([f"{x:02d}" for x in sorted(hero_numbers)]) if hero_numbers else "None")
+        with c2:
+            st.markdown(f"#### 💀 Dead Numbers (Removed)")
+            st.write(", ".join([f"{x:02d}" for x in sorted(hero_numbers.intersection(dead_numbers))]) if hero_numbers.intersection(dead_numbers) else "None")
+        with c3:
+            st.markdown(f"#### ✨ FINAL PURE NUMBERS")
+            st.success(", ".join([f"{x:02d}" for x in sorted(final_pure_numbers)]) if final_pure_numbers else "No numbers left!")
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error processing data: {e}")
 else:
     st.info("👈 Kripya apna data upload karein.")
-        
+    
