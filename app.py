@@ -4,9 +4,10 @@ import numpy as np
 from datetime import timedelta
 from collections import Counter
 
-st.set_page_config(page_title="MAYA AI - Self Correcting", layout="wide")
+st.set_page_config(page_title="MAYA AI - Frequency Tracker", layout="wide")
 
-st.title("MAYA AI 🤖: Self-Correcting Predictor (Galti Sudharne Wala AI)")
+st.title("MAYA AI 📊: Historical Frequency Tracker Engine")
+st.markdown("Yeh engine pichle 30-60 dinon ka itihas padhkar batayega ki kis 'Frequency Group' (Jaise 2 Baar ya 4 Baar) se sach mein sabse zyada number aate hain!")
 
 # --- 1. Sidebar ---
 st.sidebar.header("📁 Upload File")
@@ -51,114 +52,129 @@ if uploaded_file is not None:
             n_s = len(safe)
             return safe[:int(n_s*0.33)], safe[int(n_s*0.33):int(n_s*0.66)], safe[int(n_s*0.66):], elim_list
 
-        # --- 3. RAW MARKOV & ERROR TRACKING ---
+        # --- 3. THE HISTORICAL BACKTEST ENGINE (Finding what hits most) ---
         target_list = filtered_df[target_shift_name].tolist()
-        valid_data = [x for x in target_list if pd.notna(x)]
+        valid_dates = filtered_df.dropna(subset=[target_shift_name])['DATE'].tolist()
         
-        raw_predictions = []
-        actual_results = []
+        test_days_count = 30 # Pichle 30 din ka test karenge
+        test_dates = valid_dates[-test_days_count:] if len(valid_dates) > test_days_count else valid_dates
         
-        # Piche 30 din ka data check karke Error Mapping banana
-        test_range = min(60, len(valid_data))
-        
-        with st.spinner("AI apni pichli galtiyon (errors) ko padh raha hai..."):
-            for i in range(test_range, 0, -1):
-                past_data = valid_data[:-i]
-                if len(past_data) < 2: continue
-                actual = valid_data[-i]
-                
-                e, s = run_elimination(past_data, max_repeat_limit)
-                h, m, l, el = get_tiers(e, s)
-                
-                if actual in h: actual_tier = "High"
-                elif actual in m: actual_tier = "Medium"
-                elif actual in l: actual_tier = "Low"
-                else: actual_tier = "Eliminated"
-                
-                actual_results.append(actual_tier)
-                
-                # Raw prediction base logic (Simplistic history check)
-                if len(actual_results) >= 3:
-                    last_2 = (actual_results[-3], actual_results[-2])
-                    # Simple raw guess
-                    raw_pred = "High" # Default
-                    # Very basic raw mapping for simulation
-                    if last_2[1] == "High": raw_pred = "Medium"
-                    elif last_2[1] == "Medium": raw_pred = "Low"
-                    elif last_2[1] == "Low": raw_pred = "High"
-                    raw_predictions.append(raw_pred)
-                else:
-                    raw_predictions.append("High")
+        freq_hit_history = Counter()
 
-        # --- 4. SELF-CORRECTION LOGIC (The Magic) ---
-        # AI dekhega ki jab usne "X" bola tha, toh sach me kya aaya "Y"
-        error_map = {"High": [], "Medium": [], "Low": [], "Eliminated": []}
-        for rp, ar in zip(raw_predictions, actual_results[2:]):
-            if rp in error_map:
-                error_map[rp].append(ar)
+        with st.spinner(f"Pichle {test_days_count} dinon ka data scan kar raha hoon taaki sabse strong 'Frequency (Baar)' dhoondh sakun..."):
+            for test_date in test_dates:
+                past_df = filtered_df[filtered_df['DATE'] < test_date]
+                if len(past_df) < 15: continue
                 
-        # Aaj ki Raw Prediction
-        if len(actual_results) >= 2:
-            last_2_today = (actual_results[-2], actual_results[-1])
-            today_raw_pred = "High"
-            if last_2_today[1] == "High": today_raw_pred = "Medium"
-            elif last_2_today[1] == "Medium": today_raw_pred = "Low"
-            elif last_2_today[1] == "Low": today_raw_pred = "High"
-        else:
-            today_raw_pred = "High"
+                # Best tiers nikalna (Fast mode)
+                best_t_dict = {}
+                for shift in shift_names:
+                    if shift not in past_df.columns: continue
+                    best_t_dict[shift] = "High" # Fast assumption for speed in backtest
+                
+                all_nums = []
+                for shift in shift_names:
+                    if shift not in past_df.columns: continue
+                    s_list = past_df[shift].tolist()
+                    e, s = run_elimination(s_list, max_repeat_limit)
+                    h, m, l, el = get_tiers(e, s)
+                    all_nums.extend(h) # Checking High tier for intersection
 
-        # Apply Correction
-        correction_history = error_map.get(today_raw_pred, [])
-        if correction_history:
-            counts = Counter(correction_history)
+                f_counts = Counter(all_nums)
+                
+                # Actual Number of that day
+                actual_val = filtered_df[filtered_df['DATE'] == test_date][target_shift_name].values[0]
+                if pd.notna(actual_val):
+                    actual_res = int(actual_val)
+                    freq_of_actual = f_counts.get(actual_res, 0)
+                    freq_hit_history[freq_of_actual] += 1
+
+        # --- 4. DISPLAY HISTORICAL RESULTS ---
+        st.markdown("---")
+        st.header(f"📈 History Check: Pichle {test_days_count} dinon mein kahan se number aaye?")
+        
+        if freq_hit_history:
+            best_frequency = max(freq_hit_history, key=freq_hit_history.get)
             
-            # ELIMINATED SPIKE ALERT (Agar eliminated normally se zyada aaya hai is pattern me)
-            total_cases = sum(counts.values())
-            elim_chance = (counts.get("Eliminated", 0) / total_cases) * 100 if total_cases > 0 else 0
+            # Simple chart data preparation
+            chart_data = {"Group": [], "Kitni Baar Paas Hua": []}
+            for k in sorted(freq_hit_history.keys(), reverse=True):
+                if k > 0:
+                    chart_data["Group"].append(f"{k} Baar Aaye")
+                    chart_data["Kitni Baar Paas Hua"].append(freq_hit_history[k])
             
-            # Agar eliminated ka chance 15% se upar hai, toh seedha alert maro!
-            if elim_chance >= 15:
-                final_pred = "Eliminated"
-                reason = f"Raw AI ne {today_raw_pred} socha tha, par history batati hai ki is condition me {elim_chance:.0f}% chance 'Eliminated' (Breakout) aane ka hota hai!"
-            else:
-                final_pred = max(counts, key=counts.get)
-                reason = f"Raw AI pehle '{today_raw_pred}' predict kar raha tha. Par usne pichli galtiyan dekhi aur paya ki jab wo {today_raw_pred} sochta hai, tab asal mein **{final_pred}** aata hai. Isliye usne apna answer badal liya."
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                st.success(f"**Sabse Zordaar Group:**\n### {best_frequency} Baar Wale")
+                st.write("*(Pichle dino mein sabse zyada target numbers isi frequency se nikle hain)*")
+            with c2:
+                st.bar_chart(pd.DataFrame(chart_data).set_index("Group"))
         else:
-            final_pred = today_raw_pred
-            reason = "Data clear nahi hai, raw prediction apply ki gayi hai."
+            best_frequency = 2 # Default
+            st.warning("History check ke liye data kam hai.")
 
-        # --- 5. FINAL UI ---
+        # --- 5. LIVE PREDICTION FOR TARGET DATE ---
         st.markdown("---")
         target_date = filtered_df['DATE'].iloc[-1] + timedelta(days=1)
-        st.subheader(f"🎯 Corrected Prediction for {target_date.strftime('%d %B %Y')}")
+        st.header(f"🎯 Live Numbers for {target_date.strftime('%d %B %Y')}")
         
-        if final_pred == "Eliminated":
-            st.error(f"### ⚠️ AI WARNING: Aaj [{final_pred.upper()}] TIER se Breakout ka bada chance hai!")
-            st.write(f"💡 **AI Logic:** {reason}")
-        else:
-            st.success(f"### 🏆 AI Final Verdict: Aapko [{final_pred.upper()} TIER] par khelna chahiye!")
-            st.write(f"💡 **Self-Correction Logic:** {reason}")
+        # Step 1: Find best tier of target
+        all_best_numbers_live = []
+        with st.spinner("Aaj ke numbers calculate ho rahe hain..."):
+            for shift in shift_names:
+                if shift not in filtered_df.columns: continue
+                s_list = filtered_df[shift].tolist()
+                e, s = run_elimination(s_list, max_repeat_limit)
+                h, m, l, el = get_tiers(e, s)
+                
+                # For high accuracy grouping, we gather all tiers and group them
+                # But for safety, we focus on High and Medium intersections
+                all_best_numbers_live.extend(h)
+                all_best_numbers_live.extend(m)
 
-        # Tiers calculation for display
-        e_f, s_f = run_elimination(valid_data, max_repeat_limit)
-        h_f, m_f, l_f, el_f = get_tiers(e_f, s_f)
+        live_counts = Counter(all_best_numbers_live)
+        
+        freq_groups_live = {
+            "7 Baar": [], "6 Baar": [], "5 Baar": [], 
+            "4 Baar": [], "3 Baar": [], "2 Baar": [], "1 Baar": []
+        }
+        
+        for num, count in live_counts.items():
+            if count >= 7: freq_groups_live["7 Baar"].append(num)
+            elif count == 6: freq_groups_live["6 Baar"].append(num)
+            elif count == 5: freq_groups_live["5 Baar"].append(num)
+            elif count == 4: freq_groups_live["4 Baar"].append(num)
+            elif count == 3: freq_groups_live["3 Baar"].append(num)
+            elif count == 2: freq_groups_live["2 Baar"].append(num)
+            elif count == 1: freq_groups_live["1 Baar"].append(num)
 
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.markdown(f"#### 🔥 High ({len(h_f)}) {'✅' if final_pred=='High' else ''}")
-            st.write(", ".join([f"{x:02d}" for x in h_f]))
-        with c2:
-            st.markdown(f"#### ⚡ Medium ({len(m_f)}) {'✅' if final_pred=='Medium' else ''}")
-            st.write(", ".join([f"{x:02d}" for x in m_f]))
-        with c3:
-            st.markdown(f"#### ❄️ Low ({len(l_f)}) {'✅' if final_pred=='Low' else ''}")
-            st.write(", ".join([f"{x:02d}" for x in l_f]))
-        with c4:
-            st.markdown(f"#### 🚫 Eliminated ({len(el_f)}) {'⚠️' if final_pred=='Eliminated' else ''}")
-            st.write(", ".join([f"{x:02d}" for x in el_f]))
+        st.info(f"💡 **AI Recommendation:** History ke hisab se aaj aapko **[{best_frequency} Baar]** aane wale numbers par sabse zyada focus karna chahiye!")
+
+        t1, t2 = st.columns(2)
+        with t1:
+            st.markdown(f"#### 🏆 Recommended Groups (History Match)")
+            
+            # Show the groups that match the best historical frequency (e.g., 2 and 3)
+            best_label = f"{best_frequency} Baar"
+            st.success(f"**{best_label} Aaye Hue Numbers ({len(freq_groups_live.get(best_label, []))} Nums):**")
+            st.write(", ".join([f"{x:02d}" for x in sorted(freq_groups_live.get(best_label, []))]) if freq_groups_live.get(best_label, []) else "None")
+            
+            # Additional close matches
+            alt_label = f"{best_frequency + 1} Baar"
+            st.warning(f"**{alt_label} Aaye Hue Numbers ({len(freq_groups_live.get(alt_label, []))} Nums):**")
+            st.write(", ".join([f"{x:02d}" for x in sorted(freq_groups_live.get(alt_label, []))]) if freq_groups_live.get(alt_label, []) else "None")
+
+        with t2:
+            st.markdown(f"#### 📊 Other High Frequency Groups")
+            st.error(f"**4 Baar Aaye:** {len(freq_groups_live['4 Baar'])} Nums")
+            st.write(", ".join([f"{x:02d}" for x in sorted(freq_groups_live['4 Baar'])]) if freq_groups_live['4 Baar'] else "None")
+            
+            st.info(f"**5-7 Baar Aaye (Rare):**")
+            rare_nums = freq_groups_live['5 Baar'] + freq_groups_live['6 Baar'] + freq_groups_live['7 Baar']
+            st.write(", ".join([f"{x:02d}" for x in sorted(rare_nums)]) if rare_nums else "None")
 
     except Exception as e:
-        st.error(f"Error processing the file: {e}")
+        st.error(f"Error: {e}")
 else:
     st.info("👈 Kripya apna data upload karein.")
-    
+        
